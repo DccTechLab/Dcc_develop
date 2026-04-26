@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>DCC Controller + Auto Drive (Fixed IP Version)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+/* ★ スマホ（デフォルト） */
+body { font-size: 2.4vw; }
+h1 { font-size: 4vw; }
+h3 { font-size: 3vw; }
+p, label, span { font-size: 2.4vw; }
+#speedVal { font-size: 2.4vw; }
+#log { font-size: 2.2vw; }
+
+
+/* ★ PC（横幅 800px 以上） */
+@media (min-width: 800px) {
+  body { font-size: 8px; line-height: 1.1; }
+  h1 { font-size: 14px; line-height: 1.1; }
+  h3 { font-size: 12px; line-height: 1.1; }
+  p, label, span { font-size: 8px; line-height: 1.1; }
+  #speedVal { font-size: 12px; line-height: 1.1; }
+  
+  #log {
+    font-size: 10px;
+    height: 150px;
+    width: 95%;
+    line-height: 1.1;
+    resize: none;
+  }
+  .btn { width: 80px; height: 30px; font-size: 12px; }
+  input[type="number"] { font-size: 12px; width: 80px; }
+  .func-btn { font-size: 12px; max-width: 60px; }
+}
+
+
+</style>
+</head>
+
+<body>
+
+<h1>DCC Controller</h1>
+
+<!-- ★ 固定 IP 表示 -->
+<h3 style="font-size:2vw;">Device Info</h3>
+<p style="font-size:2vw;">R4 IP: <span id="r4ip">---</span></p>
+<p style="font-size:2vw;">Atom IP: <span id="atomip">---</span></p>
+
+<!-- 車両ID入力 -->
+<div>
+  <label style="font-size:2vw;">車両ID：</label>
+  <input id="locoId" type="number" value="49152">
+  <button class="btn" onclick="saveLocoId()">Set</button>
+</div>
+<br>
+
+<!-- 速度スライダー -->
+<div>
+  <input id="speed" type="range" min="0" max="100" value="0" class="slider">
+  <p style="font-size:2vw;">Speed: <span id="speedVal">0</span></p>
+</div>
+
+<!-- 方向 -->
+<div>
+  <button class="btn" onclick="setDir(1)">Forward</button>
+  <button class="btn" onclick="setDir(0)">Reverse</button>
+</div>
+
+<!-- パワー -->
+<div>
+  <button class="btn" onclick="setPower(1)">Power ON</button>
+  <button class="btn" onclick="setPower(0)">Power OFF</button>
+</div>
+
+<!-- Fキー -->
+<h3 style="font-size:2vw;">Functions F0〜F12</h3>
+<div class="func-grid" id="funcGrid"></div>
+
+<!-- 自動運転 -->
+<h3 style="font-size:2vw;">Auto Drive</h3>
+<button id="autoBtn" class="btn" style="width:40vw;">自動運転 OFF</button>
+
+<p style="font-size:2vw;">検知UID: <span id="uid">---</span></p>
+
+<!-- ログ -->
+<h3 style="font-size:2vw;">Log</h3>
+<textarea id="log" readonly></textarea>
+
+<script>
+// ★ 固定 IP（最重要）
+let R4_IP   = "192.168.0.101";
+let ATOM_IP = "192.168.0.102";
+// ★ 車両ID
+const LOCO_A = 49165;
+const LOCO_B = 49210;
+let LOCO_ID = LOCO_A;
+// ★ RFID
+const TRAIN_UID_MAP = {
+  "5a04bfa00c4189": LOCO_A,
+  "5a044b00000000": LOCO_A,
+  "5ae4bda50c4189": LOCO_B
+};
+
+const loco = getTrainFromUID(uid);
+
+// ★ 保存されたIDを復元
+window.onload = () => {
+  const saved = localStorage.getItem("locoId");
+  if (saved) {
+    LOCO_ID = parseInt(saved);
+    document.getElementById("locoId").value = LOCO_ID;
+  }
+  createFunctionButtons();
+  detectIPs();   // ← ★ 接続確認のみ
+};
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+
+// ★ R4 / Atom の接続確認
+function detectIPs() {
+
+  // Atom
+  fetch(`http://${ATOM_IP}/info`)
+    .then(res => res.json())
+    .then(info => {
+      document.getElementById("atomip").textContent = info.ip;
+      addLog("Atom OK: " + info.ip);
+    })
+    .catch(() => {
+      document.getElementById("atomip").textContent = "Not Found";
+    });
+
+  // R4
+  fetch(`http://${R4_IP}/info`)
+    .then(res => res.json())
+    .then(info => {
+      document.getElementById("r4ip").textContent = info.ip;
+      addLog("R4 OK: " + info.ip);
+    })
+    .catch(() => {
+      document.getElementById("r4ip").textContent = "192.168.0.101";
+    });
+}
+
+// ★ ログ追加
+function addLog(text) {
+  const logBox = document.getElementById("log");
+  const time = new Date().toLocaleTimeString();
+  logBox.value += `[${time}] ${text}\n`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+// ★ HTTP GET 送信
+function sendCmd(cmd) {
+  addLog("SEND: " + cmd);
+  fetch(`http://${R4_IP}/cmd?c=${cmd}`, { mode: "no-cors" })
+    .then(() => addLog("OK"))
+    .catch(() => addLog("OK (ignored)"));
+}
+
+// ★ 方向
+function setDir(dir) { sendCmd(`setLocoDirection(${LOCO_ID},${dir})`); }
+
+// ★ パワー
+function setPower(p) { sendCmd(`setPower(${p})`); }
+
+// ★ Fキー
+let funcState = new Array(13).fill(0);
+
+function createFunctionButtons() {
+  const grid = document.getElementById("funcGrid");
+  grid.innerHTML = "";
+  for (let f = 0; f <= 12; f++) {
+    const btn = document.createElement("button");
+    btn.id = "f" + f;
+    btn.className = "func-btn";
+    btn.innerText = "F" + f;
+    btn.onclick = () => toggleFunc(f);
+    grid.appendChild(btn);
+  }
+}
+
+function toggleFunc(f) {
+  funcState[f] = funcState[f] ? 0 : 1;
+  const btn = document.getElementById("f" + f);
+  if (funcState[f]) btn.classList.add("on");
+  else btn.classList.remove("on");
+  sendCmd(`setLocoFunction(${LOCO_ID},${f},${funcState[f]})`);
+}
+
+// ★ スピード
+let lastSend = 0;
+let lastSpeed = 0;
+
+document.getElementById("speed").addEventListener("input", function() {
+  const now = Date.now();
+  const v = parseInt(this.value);
+  document.getElementById("speedVal").innerText = v;
+
+  let interval = (v < lastSpeed) ? 50 : 100;
+  if (now - lastSend > interval) {
+    lastSend = now;
+    sendCmd(`setLocoSpeed(${LOCO_ID},${v},1)`);
+  }
+  lastSpeed = v;
+});
+
+// ★ 自動運転
+let autoMode = false;
+let lastUID = "";
+let autoBusy = false;
+let autoInterval = 10000;
+let ignoreSensorUntil =0;
+
+function isTargetTag(uid) {
+  return TRAIN_UID_MAP[uid] !== undefined;
+}
+
+document.getElementById("autoBtn").onclick = () => {
+  autoMode = !autoMode;
+  document.getElementById("autoBtn").textContent =
+    autoMode ? "自動運転 ON" : "自動運転 OFF";
+  addLog("Auto Mode = " + (autoMode ? "ON" : "OFF"));
+};
+
+// ★ 自動運転ループ
+async function autoLoop() {
+
+  if (Date.now() < ignoreSensorUntil || autoBusy) {
+    setTimeout(autoLoop, 200);
+    return;
+  }
+
+  try {
+    const res = await fetch(`http://${ATOM_IP}/uid`);
+    let uid = (await res.text()).trim();
+    document.getElementById("uid").textContent = uid;
+
+    // ★ 検知部分（autoLoop内の if (isTargetTag(uid)) の中を置き換え）
+if (isTargetTag(uid) && uid !== lastUID) {
+  const now = Date.now();
+  const loco = getTrainFromUID(uid);
+
+  if (!loco) {
+    addLog("Unknown UID detected → ignored");
+  } else if (autoMode && !autoBusy && now >= ignoreSensorUntil) {
+    addLog("Detected UID = " + uid + " → Loco " + loco + " triggered");
+    lastUID = uid;
+    autoBusy = true;
+    ignoreSensorUntil = now + 15000;
+
+    if (loco === LOCO_A) {
+      runReverseStopSequence(loco);
+    } else if (loco === LOCO_B) {
+      runForwardStopSequence(loco);
+    }
+  } else {
+    addLog("Detected UID = " + uid + " → Ignored");
+  }
+}
+
+  } catch(e) {}
+
+  setTimeout(autoLoop, 200);
+}
+
+
+
+autoLoop();
+
+// ★ 自動運転シーケンス（大幅に整理）
+
+
+async function runReverseStopSequence(loco) {
+  addLog("=== Auto Sequence START ===");
+
+  // 1. 検知時の減速（センサー上で止まりやすくする）
+  sendCmd(`setLocoSpeed(${loco},25,1)`);
+  addLog("Auto: Slow down to 25");
+  await delay(4500);   // Nゲージの慣性を考慮して少し長め
+
+  // 2. 完全停止（センサー上で一旦止める）
+  sendCmd(`setLocoSpeed(${loco},0,1)`);
+  addLog("Auto: Full stop at sensor");
+  await delay(2500);
+
+  // 3. 方向反転
+  const newDir = 0;   // 0 = Reverse（あなたのレイアウトに合わせて1に変更）
+  sendCmd(`setLocoDirection(${loco},${newDir})`);
+  addLog(`Auto: Direction reversed to ${newDir}`);
+  await delay(1800);  // 方向変更後の安定待ち
+
+  // 4. 反転後、少しだけ走らせる（ここが新しく追加）
+  sendCmd(`setLocoSpeed(${loco},95,1)`);   // 最初は控えめな速度で
+  addLog("Auto: Start after reverse (speed 55)");
+  await delay(18000);   // ← 反転後に走らせる時間（6秒）。ここを調整のメイン
+
+  // 5. 最後に完全に停止させる
+  sendCmd(`setLocoSpeed(${loco},0,1)`);
+  addLog("Auto: Final stop after reverse");
+  await delay(2000);
+
+  // 6. 次の検知までの待機（不感帯確保）
+  const waitForNextPass = 8000;   // 28秒（あなたのレイアウトに合わせて調整）
+  addLog(`Auto: Waiting ${waitForNextPass/1000} sec before next detection`);
+  await delay(waitForNextPass);
+
+  // 7. 終了処理（不感帯を長めに）
+  ignoreSensorUntil = Date.now() + 8000;
+  autoBusy = false;
+  lastUID = "";
+
+  addLog("=== Auto Sequence FINISHED - Ready for next ===");
+
+  addLog("=== Reverse STOP finished ===");
+}
+//前進停止
+async function runForwardStopSequence(loco) {
+  addLog("=== Forward STOP sequence for " + loco + " ===");
+　await delay(8000);
+  sendCmd(`setLocoSpeed(${loco},60,1)`);
+  await delay(5000);
+
+  sendCmd(`setLocoSpeed(${loco},0,1)`);
+  await delay(2000);
+ addLog("=== Kumoha13start ===");
+ sendCmd(`setLocoSpeed(49165,90,1)`);
+  await delay(2000);
+
+
+  ignoreSensorUntil = Date.now() + 15000;
+  autoBusy = false;
+  lastUID = "";
+  addLog("=== Forward STOP finished ===");
+
+
+
+}
+
+
+function monitorThread() {
+  if (autoBusy) {
+    addLog("AutoThread: RUNNING (sensor ignored)");
+  } else if (Date.now() < ignoreSensorUntil) {
+    addLog("AutoThread: DEADZONE (sensor ignored)");
+  } else {
+    addLog("AutoThread: IDLE (sensor active)");
+  }
+  setTimeout(monitorThread, 5000);
+}
+
+monitorThread();
+
+function saveLocoId() {
+  const v = parseInt(document.getElementById("locoId").value);
+  if (!isNaN(v)) {
+    LOCO_ID = v+49152;   // ★ そのまま使う（+49152 は不要）
+    localStorage.setItem("locoId", v);
+    addLog("Manual Loco ID set to " + v);
+  } else {
+    addLog("Invalid Loco ID");
+  }
+}
+function getTrainFromUID(uid) {
+  return TRAIN_UID_MAP[uid] || null;
+}
+
+
+</script>
+
+</body>
+</html>
+
