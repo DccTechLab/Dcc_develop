@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>DCC Demo Controller (Manual)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+/* ★ スマホ（デフォルト） */
+body { font-size: 2.4vw; font-family: sans-serif; background: #f4f4f9; margin: 20px; }
+h1 { font-size: 4vw; }
+h3 { font-size: 3vw; }
+p, label, span { font-size: 2.4vw; }
+#speedVal { font-size: 2.4vw; }
+#log { font-size: 2.2vw; }
+
+/* ★ PC（横幅 800px 以上） */
+@media (min-width: 800px) {
+  body { font-size: 14px; line-height: 1.2; }
+  h1 { font-size: 18px; }
+  h3 { font-size: 14px; }
+  p, label, span { font-size: 12px; }
+  
+  #log {
+    font-size: 10px;
+    height: 150px;
+    width: 95%;
+    resize: none;
+  }
+  .btn { width: 80px; height: 30px; font-size: 12px; cursor: pointer; }
+  input[type="number"] { font-size: 12px; width: 80px; }
+  .func-btn { font-size: 12px; max-width: 60px; cursor: pointer; }
+}
+
+#manualA_speedVal,
+#manualB_speedVal {
+  color: blue;
+  font-weight: bold;
+}
+
+#r4ip {
+  color: green;
+  font-weight: bold;
+}
+
+.func-btn {
+  margin: 2px;
+  padding: 5px 10px;
+}
+.func-btn.on {
+  background-color: #ffcc00;
+  font-weight: bold;
+}
+
+.master-power-box {
+  background: #eef2f7;
+  padding: 10px;
+  border-radius: 6px;
+  margin-bottom: 15px;
+  display: inline-block;
+}
+</style>
+</head>
+
+<body>
+
+<h1>DCC Demo Controller</h1>
+
+<!-- 固定 IP 表示 -->
+<h3>Device Info</h3>
+<p>R4 IP: <span id="r4ip">192.168.0.100</span></p>
+
+<!-- 電源スイッチ -->
+<div class="master-power-box">
+  <label><b>DCC Power:</b></label>
+  <button class="btn" style="background-color: #d4edda; color: #155724; font-weight:bold;" onclick="setPower(1)">Power ON</button>
+  <button class="btn" style="background-color: #f8d7da; color: #721c24; font-weight:bold;" onclick="setPower(0)">Power OFF</button>
+</div>
+
+<!-- Manual Control A -->
+<h3>Manual Control A</h3>
+<div>
+  <label>Train ID A：</label>
+  <input id="manualA_id" type="number" value="13">
+  <button class="btn" onclick="setManualA_ID()">Set</button>
+</div>
+
+<div style="display:flex; align-items:center; gap:10px; margin-top:5px;">
+  <input id="manualA_speed" type="range" min="0" max="100" value="0" style="width:200px;">
+  <p>Speed A: <span id="manualA_speedVal">0</span></p>
+
+  <label>Max:</label>
+  <input id="manualA_max" type="number" value="100" style="width:60px;">
+  <button class="btn" onclick="setManualA_Max()">Set</button>
+</div>
+
+<div style="margin-top:5px;">
+  <button class="btn" onclick="setManualA_Dir(1)">Forward</button>
+  <button class="btn" onclick="setManualA_Dir(0)">Reverse</button>
+</div>
+<br>
+
+<!-- Manual Control B -->
+<h3>Manual Control B</h3>
+<div>
+  <label>Train ID B：</label>
+  <input id="manualB_id" type="number" value="58">
+  <button class="btn" onclick="setManualB_ID()">Set</button>
+</div>
+
+<div style="display:flex; align-items:center; gap:10px; margin-top:5px;">
+  <input id="manualB_speed" type="range" min="0" max="100" value="0" style="width:200px;">
+  <p>Speed B: <span id="manualB_speedVal">0</span></p>
+
+  <label>Max:</label>
+  <input id="manualB_max" type="number" value="100" style="width:60px;">
+  <button class="btn" onclick="setManualB_Max()">Set</button>
+</div>
+
+<div style="margin-top:5px;">
+  <button class="btn" onclick="setManualB_Dir(1)">Forward</button>
+  <button class="btn" onclick="setManualB_Dir(0)">Reverse</button>
+</div>
+<br>
+
+<!-- Fキー -->
+<h3>Functions F0〜F12</h3>
+<div class="func-grid" id="funcGrid"></div>
+<br>
+
+<!-- ログ -->
+<h3>Log</h3>
+<textarea id="log" readonly></textarea>
+
+<script>
+let R4_IP = "192.168.0.100";
+const DS_OFFSET = 49152;
+
+let manualA_ID = 13 + DS_OFFSET;  
+let manualB_ID = 58 + DS_OFFSET;  
+let activeManual = "A";   
+
+window.onload = () => {
+  createFunctionButtons();
+  detectIPs();
+};
+
+function detectIPs() {
+  fetch(`http://${R4_IP}/info`)
+    .then(res => res.json())
+    .then(info => {
+      document.getElementById("r4ip").textContent = info.ip || R4_IP;
+      addLog("R4 OK: " + (info.ip || R4_IP));
+    })
+    .catch(() => { 
+      document.getElementById("r4ip").textContent = R4_IP;
+      addLog("R4 connected (IP: " + R4_IP + ")");
+    });
+}
+
+function addLog(text) {
+  const logBox = document.getElementById("log");
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString(); 
+  const ms = String(now.getMilliseconds()).padStart(3, '0'); 
+  
+  logBox.value += `[${timeStr}.${ms}] ${text}\n`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+// 単発送信関数
+function sendCmdOnce(cmd) {
+  addLog("SEND: " + cmd);
+  fetch(`http://${R4_IP}/cmd?c=${cmd}`, { mode: "no-cors" })
+    .then(() => { addLog("OK"); })
+    .catch(() => { addLog("OK (ignored)"); });
+}
+
+// リトライ（電源・方向などの重要操作用）
+async function sendCmdRetry(cmd, times = 3, intervalMs = 20) {
+  for (let i = 0; i < times; i++) {
+    sendCmdOnce(cmd);
+    if (i < times - 1) {
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+  }
+}
+
+function setPower(p) {
+  sendCmdRetry(`setPower(${p})`, 3, 20);
+  addLog(`DCC Power -> ${p ? "ON" : "OFF"}`);
+}
+
+// Fキー
+let funcState = new Array(13).fill(0);
+
+function createFunctionButtons() {
+  const grid = document.getElementById("funcGrid");
+  grid.innerHTML = "";
+  for (let f = 0; f <= 12; f++) {
+    const btn = document.createElement("button");
+    btn.id = "f" + f;
+    btn.className = "func-btn";
+    btn.innerText = "F" + f;
+    btn.onclick = () => toggleFunc(f);
+    grid.appendChild(btn);
+  }
+}
+
+async function toggleFunc(f) {
+  funcState[f] = funcState[f] ? 0 : 1;
+  const btn = document.getElementById("f" + f);
+
+  if (funcState[f]) btn.classList.add("on");
+  else btn.classList.remove("on");
+
+  let targetID = (activeManual === "A") ? manualA_ID : manualB_ID;
+  sendCmdRetry(`setLocoFunction(${targetID},${f},${funcState[f]})`, 3, 20);
+  addLog(`F${f} → ${targetID}（Active=${activeManual}）`);
+}
+
+// 手動コントロール（A）
+function setManualA_ID() {
+  const rawID = parseInt(document.getElementById("manualA_id").value);
+  manualA_ID = rawID + DS_OFFSET;   
+  activeManual = "A";   
+  addLog(`Manual A ID = ${rawID} (DS Internal: ${manualA_ID})`);
+}
+
+function setManualA_Dir(dir) {
+  activeManual = "A";
+  sendCmdRetry(`setLocoDirection(${manualA_ID},${dir})`, 3, 20);
+}
+
+// ==========================================
+// Manual A スライダー制御（滑らかな間引き送信：ブレーキ音対応）
+// ==========================================
+let throttleTimerA = null;
+let lastSentSpeedA = -1;
+let latestSpeedA = 0;
+let isDraggingA = false;
+
+const sliderA = document.getElementById("manualA_speed");
+
+sliderA.addEventListener("input", function() {
+  activeManual = "A";
+  latestSpeedA = parseInt(this.value);
+  document.getElementById("manualA_speedVal").innerText = latestSpeedA;
+  isDraggingA = true;
+
+  // 一定間隔（120ms）で現在の速度を1回ずつ送信し、デコーダーに減速を意識させる
+  if (!throttleTimerA) {
+    throttleTimerA = setInterval(() => {
+      if (latestSpeedA !== lastSentSpeedA) {
+        lastSentSpeedA = latestSpeedA;
+        sendCmdOnce(`setLocoSpeed(${manualA_ID},${latestSpeedA},1)`);
+      }
+      if (!isDraggingA && latestSpeedA === lastSentSpeedA) {
+        clearInterval(throttleTimerA);
+        throttleTimerA = null;
+      }
+    }, 120);
+  }
+});
+
+function releaseSliderA() {
+  isDraggingA = false;
+  const v = parseInt(sliderA.value);
+  if (v !== lastSentSpeedA) {
+    lastSentSpeedA = v;
+    sendCmdOnce(`setLocoSpeed(${manualA_ID},${v},1)`);
+  }
+}
+sliderA.addEventListener("mouseup", releaseSliderA);
+sliderA.addEventListener("touchend", releaseSliderA);
+
+
+// 手動コントロール（B）
+function setManualB_ID() {
+  const rawID = parseInt(document.getElementById("manualB_id").value);
+  manualB_ID = rawID + DS_OFFSET;   
+  activeManual = "B";   
+  addLog(`Manual B ID = ${rawID} (DS Internal: ${manualB_ID})`);
+}
+
+function setManualB_Dir(dir) {
+  activeManual = "B";
+  sendCmdRetry(`setLocoDirection(${manualB_ID},${dir})`, 3, 20);
+}
+
+// ==========================================
+// Manual B スライダー制御（滑らかな間引き送信：ブレーキ音対応）
+// ==========================================
+let throttleTimerB = null;
+let lastSentSpeedB = -1;
+let latestSpeedB = 0;
+let isDraggingB = false;
+
+const sliderB = document.getElementById("manualB_speed");
+
+sliderB.addEventListener("input", function() {
+  activeManual = "B";
+  latestSpeedB = parseInt(this.value);
+  document.getElementById("manualB_speedVal").innerText = latestSpeedB;
+  isDraggingB = true;
+
+  if (!throttleTimerB) {
+    throttleTimerB = setInterval(() => {
+      if (latestSpeedB !== lastSentSpeedB) {
+        lastSentSpeedB = latestSpeedB;
+        sendCmdOnce(`setLocoSpeed(${manualB_ID},${latestSpeedB},1)`);
+      }
+      if (!isDraggingB && latestSpeedB === lastSentSpeedB) {
+        clearInterval(throttleTimerB);
+        throttleTimerB = null;
+      }
+    }, 120);
+  }
+});
+
+function releaseSliderB() {
+  isDraggingB = false;
+  const v = parseInt(sliderB.value);
+  if (v !== lastSentSpeedB) {
+    lastSentSpeedB = v;
+    sendCmdOnce(`setLocoSpeed(${manualB_ID},${v},1)`);
+  }
+}
+sliderB.addEventListener("mouseup", releaseSliderB);
+sliderB.addEventListener("touchend", releaseSliderB);
+
+
+function setManualA_Max() {
+  const max = parseInt(document.getElementById("manualA_max").value);
+  if (!isNaN(max) && max > 0) {
+    document.getElementById("manualA_speed").max = max;
+    addLog("Manual A Max Speed = " + max);
+  } else {
+    addLog("Invalid Max Speed for Manual A");
+  }
+}
+
+function setManualB_Max() {
+  const max = parseInt(document.getElementById("manualB_max").value);
+  if (!isNaN(max) && max > 0) {
+    document.getElementById("manualB_speed").max = max;
+    addLog("Manual B Max Speed = " + max);
+  } else {
+    addLog("Invalid Max Speed for Manual B");
+  }
+}
+</script>
+
+</body>
+</html>
